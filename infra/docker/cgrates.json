@@ -1,0 +1,52 @@
+{
+  "general": {
+    "node_id": "cgrates-dev",
+    "logger": "*stdout",
+    "log_level": 7,
+    "rounding_decimals": 10,
+    "dbdata_encoding": "*msgpack",
+    "tpexport_dir": "/var/spool/cgrates/tpe",
+    "poster_attempts": 1,
+    "failed_posts_dir": "/var/spool/cgrates/failed_posts",
+    "failed_posts_ttl": "5s"
+  },
+  "listen": {
+    "rpc_json": ":2012",
+    "rpc_gob": ":2013",
+    "http": ":2080"
+  },
+  "data_db": {
+    "db_type": "*redis",
+    "db_host": "redis",
+    "db_port": 6379,
+    "db_name": "10"
+  },
+  "stor_db": {
+    "db_type": "*postgres",
+    "db_host": "postgres",
+    "db_port": 5432,
+    "db_name": "uibill",
+    "db_user": "postgres",
+    "db_password": "postgres"
+  },
+  "rals": {
+    "enabled": true
+  },
+  "scheduler": {
+    "enabled": true
+  },
+  "cdrs": {
+    "enabled": true,
+    "chargers_conns": ["*internal"]
+  },
+  "sessions": {
+    "enabled": true,
+    "listen_bijson": ":2014",
+    "chargers_conns": ["*internal"],
+    "rals_conns": ["*internal"],
+    "cdrs_conns": ["*internal"]
+  },
+  "apiers": {
+    "enabled": true
+  }
+}

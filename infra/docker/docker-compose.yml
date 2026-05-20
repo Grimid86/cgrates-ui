@@ -1,0 +1,256 @@
+version: "3.9"
+
+services:
+  # --- PostgreSQL 15+ ---
+  postgres:
+    image: postgres:15-alpine
+    container_name: uibill-postgres
+    hostname: postgres
+    environment:
+      POSTGRES_DB: uibill
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ../../database/migrations:/docker-entrypoint-initdb.d/migrations:ro
+      - ../../database/seeds:/docker-entrypoint-initdb.d/seeds:ro
+      - ../../database/functions:/docker-entrypoint-initdb.d/functions:ro
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d uibill"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - uibill-internal
+    command: >
+      postgres
+      -c wal_level=replica
+      -c hot_standby=on
+      -c max_wal_senders=10
+      -c max_replication_slots=10
+      -c shared_preload_libraries='pgcrypto,uuid-ossp'
+
+  # --- Redis Cluster (single node для dev) ---
+  redis:
+    image: redis:7-alpine
+    container_name: uibill-redis
+    hostname: redis
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks:
+      - uibill-internal
+
+  # --- Apache Pulsar (standalone для dev) ---
+  pulsar:
+    image: apachepulsar/pulsar:3.2.0
+    container_name: uibill-pulsar
+    hostname: pulsar
+    command: >
+      bin/pulsar standalone
+      --no-functions-worker
+      --no-stream-storage
+    environment:
+      PULSAR_MEM: " -Xms512m -Xmx512m -XX:MaxDirectMemorySize=256m"
+    ports:
+      - "6650:6650"
+      - "8080:8080"
+    volumes:
+      - pulsar_data:/pulsar/data
+      - pulsar_conf:/pulsar/conf
+    healthcheck:
+      test: ["CMD", "bin/pulsar-admin", "brokers", "healthcheck"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    networks:
+      - uibill-internal
+
+  # --- MinIO (S3-compatible для логотипов/WAL) ---
+  minio:
+    image: minio/minio:latest
+    container_name: uibill-minio
+    hostname: minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+    networks:
+      - uibill-internal
+
+  # --- CGRateS (mock/development instance) ---
+  cgrates:
+    image: cgrates/cgrates:v0.11.0~dev
+    container_name: uibill-cgrates
+    hostname: cgrates
+    volumes:
+      - ./cgrates.json:/etc/cgrates/cgrates.json:ro
+    ports:
+      - "2012:2012"
+      - "2013:2013"
+      - "2014:2014"
+    networks:
+      - uibill-internal
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # --- SelfCare Gateway (build from source) ---
+  selfcare-gateway:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.gateway
+      args:
+        GATEWAY_TYPE: selfcare
+    container_name: uibill-selfcare-gateway
+    hostname: selfcare-gateway
+    environment:
+      - PORT=8080
+      - GATEWAY_TYPE=selfcare
+      - DB_DSN=postgres://postgres:postgres@postgres:5432/uibill?sslmode=disable
+      - REDIS_URL=redis:6379
+      - PULSAR_URL=pulsar://pulsar:6650
+      - CGRATES_HOST=cgrates
+      - CGRATES_PORT=2012
+      - JWT_SECRET=${JWT_SECRET_SELFCARE:-dev-selfcare-secret}
+    ports:
+      - "8081:8080"
+    networks:
+      - uibill-internal
+    depends_on:
+      - postgres
+      - redis
+      - pulsar
+      - cgrates
+
+  # --- Operator Gateway ---
+  operator-gateway:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.gateway
+      args:
+        GATEWAY_TYPE: operator
+    container_name: uibill-operator-gateway
+    hostname: operator-gateway
+    environment:
+      - PORT=8080
+      - GATEWAY_TYPE=operator
+      - DB_DSN=postgres://postgres:postgres@postgres:5432/uibill?sslmode=disable
+      - REDIS_URL=redis:6379
+      - PULSAR_URL=pulsar://pulsar:6650
+      - CGRATES_HOST=cgrates
+      - CGRATES_PORT=2012
+      - JWT_SECRET=${JWT_SECRET_OPERATOR:-dev-operator-secret}
+    ports:
+      - "8082:8080"
+    networks:
+      - uibill-internal
+    depends_on:
+      - postgres
+      - redis
+      - pulsar
+      - cgrates
+
+  # --- Admin Gateway ---
+  admin-gateway:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.gateway
+      args:
+        GATEWAY_TYPE: admin
+    container_name: uibill-admin-gateway
+    hostname: admin-gateway
+    environment:
+      - PORT=8080
+      - GATEWAY_TYPE=admin
+      - DB_DSN=postgres://postgres:postgres@postgres:5432/uibill?sslmode=disable
+      - REDIS_URL=redis:6379
+      - PULSAR_URL=pulsar://pulsar:6650
+      - CGRATES_HOST=cgrates
+      - CGRATES_PORT=2012
+      - JWT_SECRET=${JWT_SECRET_ADMIN:-dev-admin-secret}
+    ports:
+      - "8083:8080"
+    networks:
+      - uibill-internal
+    depends_on:
+      - postgres
+      - redis
+      - pulsar
+      - cgrates
+
+  # --- Pulsar Init (создание топиков и тенантов) ---
+  pulsar-init:
+    image: apachepulsar/pulsar:3.2.0
+    container_name: uibill-pulsar-init
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        sleep 15
+        bin/pulsar-admin tenants create billing || true
+        bin/pulsar-admin namespaces create billing/events || true
+        bin/pulsar-admin namespaces create billing/audit || true
+        bin/pulsar-admin namespaces create billing/notifications || true
+        bin/pulsar-admin namespaces create billing/commands || true
+        bin/pulsar-admin namespaces create billing/config || true
+        
+        # Создание partitioned topics
+        for topic in billing.events.charges billing.events.topups billing.events.sessions.started billing.events.sessions.ended; do
+          bin/pulsar-admin topics create-partitioned-topic persistent://billing/events/$$topic --partitions 6 || true
+        done
+        bin/pulsar-admin topics create-partitioned-topic persistent://billing/events/billing.events.cdr.raw --partitions 12 || true
+        
+        for topic in audit.events audit.security; do
+          bin/pulsar-admin topics create-partitioned-topic persistent://billing/audit/$$topic --partitions 3 || true
+        done
+        
+        for topic in notifications.email notifications.sms notifications.push; do
+          bin/pulsar-admin topics create-partitioned-topic persistent://billing/notifications/$$topic --partitions 3 || true
+        done
+        
+        for topic in commands.balance.adjust commands.tariff.update; do
+          bin/pulsar-admin topics create-partitioned-topic persistent://billing/commands/$$topic --partitions 3 || true
+        done
+        
+        bin/pulsar-admin topics create-partitioned-topic persistent://billing/config/config.changes --partitions 1 || true
+        echo "Pulsar topics initialized"
+    networks:
+      - uibill-internal
+    depends_on:
+      pulsar:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  redis_data:
+  pulsar_data:
+  pulsar_conf:
+  minio_data:
+
+networks:
+  uibill-internal:
+    driver: bridge
+    name: uibill-internal
