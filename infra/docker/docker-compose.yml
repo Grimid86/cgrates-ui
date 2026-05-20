@@ -17,7 +17,7 @@ services:
       - ../../database/seeds:/docker-entrypoint-initdb.d/seeds:ro
       - ../../database/functions:/docker-entrypoint-initdb.d/functions:ro
     ports:
-      - "5432:5432"
+      - "15432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d uibill"]
       interval: 10s
@@ -40,7 +40,7 @@ services:
     hostname: redis
     command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
     ports:
-      - "6379:6379"
+      - "16379:6379"
     volumes:
       - redis_data:/data
     healthcheck:
@@ -63,8 +63,8 @@ services:
     environment:
       PULSAR_MEM: " -Xms512m -Xmx512m -XX:MaxDirectMemorySize=256m"
     ports:
-      - "6650:6650"
-      - "8080:8080"
+      - "16650:6650"
+      - "18085:8080"
     volumes:
       - pulsar_data:/pulsar/data
       - pulsar_conf:/pulsar/conf
@@ -87,8 +87,8 @@ services:
       MINIO_ROOT_USER: minioadmin
       MINIO_ROOT_PASSWORD: minioadmin
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "19000:9000"
+      - "19001:9001"
     volumes:
       - minio_data:/data
     healthcheck:
@@ -99,17 +99,15 @@ services:
     networks:
       - uibill-internal
 
-  # --- CGRateS (mock/development instance) ---
+  # --- CGRateS Mock (development instance) ---
   cgrates:
-    image: cgrates/cgrates:v0.11.0~dev
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.cgrates-mock
     container_name: uibill-cgrates
     hostname: cgrates
-    volumes:
-      - ./cgrates.json:/etc/cgrates/cgrates.json:ro
     ports:
       - "2012:2012"
-      - "2013:2013"
-      - "2014:2014"
     networks:
       - uibill-internal
     depends_on:
@@ -130,14 +128,20 @@ services:
     environment:
       - PORT=8080
       - GATEWAY_TYPE=selfcare
-      - DB_DSN=postgres://postgres:postgres@postgres:5432/uibill?sslmode=disable
-      - REDIS_URL=redis:6379
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=uibill
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_SSLMODE=disable
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
       - PULSAR_URL=pulsar://pulsar:6650
       - CGRATES_HOST=cgrates
       - CGRATES_PORT=2012
       - JWT_SECRET=${JWT_SECRET_SELFCARE:-dev-selfcare-secret}
     ports:
-      - "8081:8080"
+      - "18081:8080"
     networks:
       - uibill-internal
     depends_on:
@@ -158,14 +162,20 @@ services:
     environment:
       - PORT=8080
       - GATEWAY_TYPE=operator
-      - DB_DSN=postgres://postgres:postgres@postgres:5432/uibill?sslmode=disable
-      - REDIS_URL=redis:6379
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=uibill
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_SSLMODE=disable
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
       - PULSAR_URL=pulsar://pulsar:6650
       - CGRATES_HOST=cgrates
       - CGRATES_PORT=2012
       - JWT_SECRET=${JWT_SECRET_OPERATOR:-dev-operator-secret}
     ports:
-      - "8082:8080"
+      - "18082:8080"
     networks:
       - uibill-internal
     depends_on:
@@ -186,14 +196,20 @@ services:
     environment:
       - PORT=8080
       - GATEWAY_TYPE=admin
-      - DB_DSN=postgres://postgres:postgres@postgres:5432/uibill?sslmode=disable
-      - REDIS_URL=redis:6379
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=uibill
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_SSLMODE=disable
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
       - PULSAR_URL=pulsar://pulsar:6650
       - CGRATES_HOST=cgrates
       - CGRATES_PORT=2012
       - JWT_SECRET=${JWT_SECRET_ADMIN:-dev-admin-secret}
     ports:
-      - "8083:8080"
+      - "18083:8080"
     networks:
       - uibill-internal
     depends_on:
@@ -201,6 +217,45 @@ services:
       - redis
       - pulsar
       - cgrates
+
+  # --- SelfCare UI ---
+  selfcare-ui:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.selfcare-ui
+    container_name: uibill-selfcare-ui
+    ports:
+      - "13001:80"
+    networks:
+      - uibill-internal
+    depends_on:
+      - selfcare-gateway
+
+  # --- Operator UI ---
+  operator-ui:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.operator-ui
+    container_name: uibill-operator-ui
+    ports:
+      - "13002:80"
+    networks:
+      - uibill-internal
+    depends_on:
+      - operator-gateway
+
+  # --- Admin UI ---
+  admin-ui:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.admin-ui
+    container_name: uibill-admin-ui
+    ports:
+      - "13003:80"
+    networks:
+      - uibill-internal
+    depends_on:
+      - admin-gateway
 
   # --- Pulsar Init (создание топиков и тенантов) ---
   pulsar-init:

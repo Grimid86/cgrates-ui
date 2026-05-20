@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -473,7 +474,7 @@ func (h *Handler) AdjustBalance(c echo.Context) error {
 				"reason":       req.Reason,
 			}
 			payload, _ := json.Marshal(event)
-			go h.deps.Pulsar.PublishTo(ctx, "persistent://billing/commands/commands.balance.adjust", payload, msisdn)
+			go h.deps.Pulsar.PublishTo(context.Background(), "persistent://billing/commands/commands.balance.adjust", payload, msisdn)
 		}
 	}
 
@@ -710,7 +711,7 @@ func (h *Handler) BulkTariffChange(c echo.Context) error {
 			"tenant_id":      claims.TenantID,
 		}
 		payload, _ := json.Marshal(event)
-		go h.deps.Pulsar.PublishTo(ctx, "persistent://billing/commands/commands.tariff.update", payload, "")
+		go h.deps.Pulsar.PublishTo(context.Background(), "persistent://billing/commands/commands.tariff.update", payload, "")
 	}
 
 	return c.JSON(http.StatusAccepted, map[string]interface{}{
@@ -744,7 +745,7 @@ func (h *Handler) BulkBonus(c echo.Context) error {
 			"operator_id":    claims.UserID,
 		}
 		payload, _ := json.Marshal(event)
-		go h.deps.Pulsar.PublishTo(ctx, "persistent://billing/commands/commands.balance.adjust", payload, "")
+		go h.deps.Pulsar.PublishTo(context.Background(), "persistent://billing/commands/commands.balance.adjust", payload, "")
 	}
 
 	return c.JSON(http.StatusAccepted, map[string]interface{}{

@@ -1,7 +1,7 @@
 # Multi-stage build for UI-Bill Gateways
 # Build argument: GATEWAY_TYPE=[selfcare|operator|admin]
 
-FROM golang:1.22-alpine AS builder
+FROM golang:1.23-alpine AS builder
 
 ARG GATEWAY_TYPE=selfcare
 WORKDIR /app
@@ -15,13 +15,13 @@ RUN go mod download
 
 # Copy shared packages and gateway-specific code
 COPY backend/pkg ./pkg
-COPY backend/${GATEWAY_TYPE}-gateway ./gateway
+COPY backend/${GATEWAY_TYPE}-gateway ./${GATEWAY_TYPE}-gateway
 
 # Build static binary
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
     -ldflags='-w -s -extldflags "-static"' \
     -a -installsuffix cgo \
-    -o /gateway ./gateway/cmd/main.go
+    -o /gateway ./${GATEWAY_TYPE}-gateway/cmd/main.go
 
 # Final stage: distroless
 FROM gcr.io/distroless/static:nonroot

@@ -3,7 +3,7 @@ FROM node:20-alpine AS builder
 
 WORKDIR /app
 COPY frontend/admin-ui/package*.json ./
-RUN npm ci
+RUN npm install
 
 COPY frontend/admin-ui/ ./
 RUN npm run build

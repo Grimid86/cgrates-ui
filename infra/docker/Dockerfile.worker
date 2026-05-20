@@ -1,23 +1,23 @@
 # Multi-stage build for UI-Bill Workers
 # Build argument: WORKER_TYPE=[audit-consumer|cdr-processor|email-consumer|sms-consumer|balance-monitor|cache-invalidator]
 
-FROM golang:1.22-alpine AS builder
+FROM golang:1.23-alpine AS builder
 
 ARG WORKER_TYPE=audit-consumer
 WORKDIR /app
 
 RUN apk add --no-cache git ca-certificates tzdata
 
+COPY backend/go.mod backend/go.sum ../backend/
+COPY backend/pkg ../backend/pkg
 COPY workers/go.mod workers/go.sum ./
 RUN go mod download
-
-COPY backend/pkg ../backend/pkg
-COPY workers/${WORKER_TYPE} ./worker
+COPY workers/${WORKER_TYPE} ./${WORKER_TYPE}
 
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
     -ldflags='-w -s -extldflags "-static"' \
     -a -installsuffix cgo \
-    -o /worker ./worker/cmd/main.go
+    -o /worker ./${WORKER_TYPE}/cmd/main.go
 
 FROM gcr.io/distroless/static:nonroot
 

@@ -35,14 +35,17 @@ func SanitizeMiddleware(cfg SanitizeConfig) echo.MiddlewareFunc {
 			// Limit body size
 			c.Request().Body = http.MaxBytesReader(c.Response().Writer, c.Request().Body, cfg.MaxBodySize)
 
-			// Validate path parameters against patterns
-			for name, value := range c.ParamValues() {
-				if pattern, ok := cfg.AllowedPatterns[name]; ok {
-					if !pattern.MatchString(value) {
-						return echo.NewHTTPError(http.StatusBadRequest, "invalid parameter: "+name)
+				// Validate path parameters against patterns
+				names := c.ParamNames()
+				values := c.ParamValues()
+				for i, name := range names {
+					value := values[i]
+					if pattern, ok := cfg.AllowedPatterns[name]; ok {
+						if !pattern.MatchString(value) {
+							return echo.NewHTTPError(http.StatusBadRequest, "invalid parameter: "+name)
+						}
 					}
 				}
-			}
 
 			// Sanitize query parameters
 			q := c.Request().URL.Query()

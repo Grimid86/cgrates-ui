@@ -46,7 +46,6 @@ func New(cfg Config) (*Client, error) {
 	if cfg.Topic != "" {
 		producer, err = client.CreateProducer(pulsar.ProducerOptions{
 			Topic:                   cfg.Topic,
-			BatchingEnabled:         true,
 			BatchingMaxPublishDelay: 10 * time.Millisecond,
 		})
 		if err != nil {

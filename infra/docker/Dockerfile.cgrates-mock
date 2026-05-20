@@ -1,0 +1,4 @@
+FROM python:3-alpine
+COPY infra/docker/cgrates-mock.py /app/cgrates-mock.py
+EXPOSE 2012
+CMD ["python", "/app/cgrates-mock.py"]

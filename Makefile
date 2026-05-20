@@ -15,13 +15,13 @@ help: ## Показать список команд
 
 # --- Docker Compose ---
 up: ## Поднять локальное окружение (PostgreSQL, Redis, Pulsar, MinIO)
-	docker-compose -f $(COMPOSE_FILE) up -d
+	docker compose -f $(COMPOSE_FILE) up -d
 
 down: ## Остановить локальное окружение
-	docker-compose -f $(COMPOSE_FILE) down -v
+	docker compose -f $(COMPOSE_FILE) down -v
 
 logs: ## Показать логи всех сервисов
-	docker-compose -f $(COMPOSE_FILE) logs -f
+	docker compose -f $(COMPOSE_FILE) logs -f
 
 # --- База данных ---
 migrate-up: ## Применить миграции
@@ -77,4 +77,4 @@ k8s-deploy: ## Применить Kubernetes манифесты (требует 
 
 clean: ## Очистить артефакты сборки
 	rm -rf bin/
-	docker-compose -f $(COMPOSE_FILE) down -v --rmi local
+	docker compose -f $(COMPOSE_FILE) down -v --rmi local
