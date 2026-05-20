@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Grimid86/cgrates-ui/backend/pkg/auth"
 	"github.com/Grimid86/cgrates-ui/backend/pkg/branding"
 	"github.com/Grimid86/cgrates-ui/backend/pkg/config"
 	"github.com/Grimid86/cgrates-ui/backend/pkg/db"
@@ -85,6 +86,8 @@ func main() {
 		SyncForAuth: true,
 	}))
 
+	staffAuth := auth.NewStaffAuth(dbPool, jwtCfg)
+
 	h := handlers.New(handlers.Dependencies{
 		DB:        dbPool,
 		Redis:     redisClient,
@@ -92,6 +95,7 @@ func main() {
 		I18n:      i18nSvc,
 		Branding:  brandingSvc,
 		JWTConfig: jwtCfg,
+		StaffAuth: staffAuth,
 	})
 
 	// Public
