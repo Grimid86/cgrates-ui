@@ -33,8 +33,14 @@ func New(cfg Config) (*Pool, error) {
 		return nil, fmt.Errorf("parse db config: %w", err)
 	}
 
-	poolCfg.MaxConns = cfg.MaxConns
-	poolCfg.MinConns = cfg.MinConns
+	if cfg.MaxConns > 0 {
+		poolCfg.MaxConns = cfg.MaxConns
+	} else {
+		poolCfg.MaxConns = 10
+	}
+	if cfg.MinConns > 0 {
+		poolCfg.MinConns = cfg.MinConns
+	}
 	poolCfg.MaxConnLifetime = cfg.MaxLifetime
 	poolCfg.MaxConnIdleTime = cfg.MaxIdleTime
 

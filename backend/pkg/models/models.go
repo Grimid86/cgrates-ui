@@ -26,6 +26,8 @@ type User struct {
 	RoleCode            string    `json:"role" db:"code"`
 	Locale              string    `json:"locale" db:"locale"`
 	MFAEnabled          bool      `json:"mfa_enabled" db:"mfa_enabled"`
+	MFASecret           *string   `json:"-" db:"mfa_secret"`
+	MFABackupCodes      []string  `json:"-" db:"mfa_backup_codes"`
 	IsActive            bool      `json:"is_active" db:"is_active"`
 	FailedLoginAttempts int       `json:"failed_login_attempts" db:"failed_login_attempts"`
 	LockedUntil         *time.Time `json:"locked_until,omitempty" db:"locked_until"`

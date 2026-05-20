@@ -3,11 +3,13 @@ import { useQuery } from 'react-query'
 import api from '../services/api'
 import DataTable from '../components/ui/DataTable'
 import Pagination from '../components/ui/Pagination'
+import { useI18n } from '../contexts/I18nContext'
 
 export default function SubscribersPage() {
   const [page, setPage] = useState(1)
   const [search, setSearch] = useState('')
   const [status, setStatus] = useState('')
+  const { t } = useI18n()
 
   const { data, isLoading } = useQuery(
     ['subscribers', page, search, status],
@@ -50,8 +52,8 @@ export default function SubscribersPage() {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">Subscribers</h1>
-        <a href="/subscribers/new" className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700">Add Subscriber</a>
+        <h1 className="text-2xl font-bold">{t('nav.subscribers', 'common')}</h1>
+        <a href="/subscribers/new" className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700">{t('buttons.create', 'buttons')}</a>
       </div>
 
       <div className="bg-white rounded-lg shadow p-4 flex gap-4">

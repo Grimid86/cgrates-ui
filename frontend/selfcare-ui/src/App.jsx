@@ -6,6 +6,7 @@ import BalancePage from './pages/BalancePage'
 import CDRPage from './pages/CDRPage'
 import ProfilePage from './pages/ProfilePage'
 import TopUpPage from './pages/TopUpPage'
+import TopUpSuccessPage from './pages/TopUpSuccessPage'
 import ProtectedRoute from './components/common/ProtectedRoute'
 
 function App() {
@@ -19,6 +20,7 @@ function App() {
           <Route path="/cdr" element={<CDRPage />} />
           <Route path="/profile" element={<ProfilePage />} />
           <Route path="/topup" element={<TopUpPage />} />
+          <Route path="/topup/success" element={<TopUpSuccessPage />} />
         </Route>
       </Route>
     </Routes>

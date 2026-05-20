@@ -6,6 +6,7 @@ import './index.css'
 import App from './App'
 import { AuthProvider } from './contexts/AuthContext'
 import { BrandingProvider } from './contexts/BrandingContext'
+import { I18nProvider } from './contexts/I18nContext'
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -21,9 +22,11 @@ ReactDOM.createRoot(document.getElementById('root')).render(
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
         <BrandingProvider>
-          <AuthProvider>
-            <App />
-          </AuthProvider>
+          <I18nProvider>
+            <AuthProvider>
+              <App />
+            </AuthProvider>
+          </I18nProvider>
         </BrandingProvider>
       </BrowserRouter>
     </QueryClientProvider>

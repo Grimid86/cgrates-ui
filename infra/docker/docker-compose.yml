@@ -139,7 +139,7 @@ services:
       - PULSAR_URL=pulsar://pulsar:6650
       - CGRATES_HOST=cgrates
       - CGRATES_PORT=2012
-      - JWT_SECRET=${JWT_SECRET_SELFCARE:-dev-selfcare-secret}
+      - JWT_SECRET_SELFCARE=${JWT_SECRET_SELFCARE:-dev-selfcare-secret}
     ports:
       - "18081:8080"
     networks:
@@ -173,7 +173,12 @@ services:
       - PULSAR_URL=pulsar://pulsar:6650
       - CGRATES_HOST=cgrates
       - CGRATES_PORT=2012
-      - JWT_SECRET=${JWT_SECRET_OPERATOR:-dev-operator-secret}
+      - JWT_SECRET_OPERATOR=${JWT_SECRET_OPERATOR:-dev-operator-secret}
+      - MINIO_ENDPOINT=http://minio:9000
+      - MINIO_ACCESS_KEY=minioadmin
+      - MINIO_SECRET_KEY=minioadmin
+      - MINIO_BUCKET=uibill
+      - MINIO_USE_SSL=false
     ports:
       - "18082:8080"
     networks:
@@ -207,7 +212,12 @@ services:
       - PULSAR_URL=pulsar://pulsar:6650
       - CGRATES_HOST=cgrates
       - CGRATES_PORT=2012
-      - JWT_SECRET=${JWT_SECRET_ADMIN:-dev-admin-secret}
+      - JWT_SECRET_ADMIN=${JWT_SECRET_ADMIN:-dev-admin-secret}
+      - MINIO_ENDPOINT=http://minio:9000
+      - MINIO_ACCESS_KEY=minioadmin
+      - MINIO_SECRET_KEY=minioadmin
+      - MINIO_BUCKET=uibill
+      - MINIO_USE_SSL=false
     ports:
       - "18083:8080"
     networks:
@@ -265,38 +275,170 @@ services:
     command:
       - |
         sleep 15
-        bin/pulsar-admin tenants create billing || true
-        bin/pulsar-admin namespaces create billing/events || true
-        bin/pulsar-admin namespaces create billing/audit || true
-        bin/pulsar-admin namespaces create billing/notifications || true
-        bin/pulsar-admin namespaces create billing/commands || true
-        bin/pulsar-admin namespaces create billing/config || true
+        PA="bin/pulsar-admin --admin-url http://pulsar:8080"
+        $$PA tenants create billing || true
+        $$PA namespaces create billing/events || true
+        $$PA namespaces create billing/audit || true
+        $$PA namespaces create billing/notifications || true
+        $$PA namespaces create billing/commands || true
+        $$PA namespaces create billing/config || true
         
         # Создание partitioned topics
         for topic in billing.events.charges billing.events.topups billing.events.sessions.started billing.events.sessions.ended; do
-          bin/pulsar-admin topics create-partitioned-topic persistent://billing/events/$$topic --partitions 6 || true
+          $$PA topics create-partitioned-topic persistent://billing/events/$$topic --partitions 6 || true
         done
-        bin/pulsar-admin topics create-partitioned-topic persistent://billing/events/billing.events.cdr.raw --partitions 12 || true
+        $$PA topics create-partitioned-topic persistent://billing/events/billing.events.cdr.raw --partitions 12 || true
         
         for topic in audit.events audit.security; do
-          bin/pulsar-admin topics create-partitioned-topic persistent://billing/audit/$$topic --partitions 3 || true
+          $$PA topics create-partitioned-topic persistent://billing/audit/$$topic --partitions 3 || true
         done
         
         for topic in notifications.email notifications.sms notifications.push; do
-          bin/pulsar-admin topics create-partitioned-topic persistent://billing/notifications/$$topic --partitions 3 || true
+          $$PA topics create-partitioned-topic persistent://billing/notifications/$$topic --partitions 3 || true
         done
         
         for topic in commands.balance.adjust commands.tariff.update; do
-          bin/pulsar-admin topics create-partitioned-topic persistent://billing/commands/$$topic --partitions 3 || true
+          $$PA topics create-partitioned-topic persistent://billing/commands/$$topic --partitions 3 || true
         done
         
-        bin/pulsar-admin topics create-partitioned-topic persistent://billing/config/config.changes --partitions 1 || true
+        $$PA topics create-partitioned-topic persistent://billing/config/config.changes --partitions 1 || true
         echo "Pulsar topics initialized"
     networks:
       - uibill-internal
     depends_on:
       pulsar:
         condition: service_healthy
+
+  # --- Workers ---
+  audit-consumer:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.worker
+      args:
+        WORKER_TYPE: audit-consumer
+    container_name: uibill-audit-consumer
+    environment:
+      - DB_DSN=postgres://postgres:postgres@postgres:5432/uibill?sslmode=disable
+      - PULSAR_URL=pulsar://pulsar:6650
+      - PULSAR_TENANT=billing
+    networks:
+      - uibill-internal
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      pulsar-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  cdr-processor:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.worker
+      args:
+        WORKER_TYPE: cdr-processor
+    container_name: uibill-cdr-processor
+    environment:
+      - DB_DSN=postgres://postgres:postgres@postgres:5432/uibill?sslmode=disable
+      - PULSAR_URL=pulsar://pulsar:6650
+      - PULSAR_TENANT=billing
+    networks:
+      - uibill-internal
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      pulsar-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  email-consumer:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.worker
+      args:
+        WORKER_TYPE: email-consumer
+    container_name: uibill-email-consumer
+    environment:
+      - DB_DSN=postgres://postgres:postgres@postgres:5432/uibill?sslmode=disable
+      - PULSAR_URL=pulsar://pulsar:6650
+      - PULSAR_TENANT=billing
+      - SMTP_HOST=${SMTP_HOST:-smtp.example.com}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_USER=${SMTP_USER:-}
+      - SMTP_PASSWORD=${SMTP_PASSWORD:-}
+      - SMTP_FROM=${SMTP_FROM:-noreply@billing.com}
+    networks:
+      - uibill-internal
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      pulsar-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  sms-consumer:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.worker
+      args:
+        WORKER_TYPE: sms-consumer
+    container_name: uibill-sms-consumer
+    environment:
+      - PULSAR_URL=pulsar://pulsar:6650
+      - PULSAR_TENANT=billing
+    networks:
+      - uibill-internal
+    depends_on:
+      pulsar-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  balance-monitor:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.worker
+      args:
+        WORKER_TYPE: balance-monitor
+    container_name: uibill-balance-monitor
+    environment:
+      - DB_DSN=postgres://postgres:postgres@postgres:5432/uibill?sslmode=disable
+      - PULSAR_URL=pulsar://pulsar:6650
+      - PULSAR_TENANT=billing
+    networks:
+      - uibill-internal
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      pulsar-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  cache-invalidator:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.worker
+      args:
+        WORKER_TYPE: cache-invalidator
+    container_name: uibill-cache-invalidator
+    environment:
+      - REDIS_URL=redis:6379
+      - PULSAR_URL=pulsar://pulsar:6650
+      - PULSAR_TENANT=billing
+    networks:
+      - uibill-internal
+    depends_on:
+      redis:
+        condition: service_healthy
+      pulsar-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
 
 volumes:
   postgres_data:

@@ -9,6 +9,7 @@ import BrandingPage from './pages/BrandingPage'
 import LocalizationPage from './pages/LocalizationPage'
 import MonitoringPage from './pages/MonitoringPage'
 import AuditLogPage from './pages/AuditLogPage'
+import ProfilePage from './pages/ProfilePage'
 import ProtectedRoute from './components/common/ProtectedRoute'
 
 function App() {
@@ -25,6 +26,7 @@ function App() {
           <Route path="/localization" element={<LocalizationPage />} />
           <Route path="/monitoring" element={<MonitoringPage />} />
           <Route path="/audit-log" element={<AuditLogPage />} />
+          <Route path="/profile" element={<ProfilePage />} />
         </Route>
       </Route>
     </Routes>

@@ -2,6 +2,8 @@
 package handlers
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"strconv"
@@ -10,12 +12,14 @@ import (
 	"github.com/Grimid86/cgrates-ui/backend/pkg/auth"
 	"github.com/Grimid86/cgrates-ui/backend/pkg/branding"
 	"github.com/Grimid86/cgrates-ui/backend/pkg/cgrates"
+	"github.com/Grimid86/cgrates-ui/backend/pkg/config"
 	"github.com/Grimid86/cgrates-ui/backend/pkg/db"
 	"github.com/Grimid86/cgrates-ui/backend/pkg/i18n"
 	"github.com/Grimid86/cgrates-ui/backend/pkg/middleware"
 	"github.com/Grimid86/cgrates-ui/backend/pkg/models"
 	"github.com/Grimid86/cgrates-ui/backend/pkg/pulsar"
 	"github.com/Grimid86/cgrates-ui/backend/pkg/redis"
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/labstack/echo/v4"
 )
 
@@ -29,6 +33,7 @@ type Dependencies struct {
 	Branding    *branding.Service
 	JWTConfig   middleware.JWTConfig
 	SelfCareAuth *auth.SelfCareAuth
+	Config      *config.Config
 }
 
 // Handler contains all HTTP handlers
@@ -39,7 +44,7 @@ type Handler struct {
 // New creates a new handler instance
 func New(deps Dependencies) *Handler {
 	if deps.SelfCareAuth == nil {
-		deps.SelfCareAuth = auth.NewSelfCareAuth(deps.DB, deps.JWTConfig)
+		deps.SelfCareAuth = auth.NewSelfCareAuth(deps.DB, deps.JWTConfig, deps.Config)
 	}
 	return &Handler{deps: deps}
 }
@@ -120,6 +125,12 @@ func (h *Handler) Login(c echo.Context) error {
 	// Authenticate subscriber
 	sub, err := h.deps.SelfCareAuth.Authenticate(ctx, req.MSISDN, req.PIN)
 	if err != nil {
+		if err.Error() == "account locked" {
+			return echo.NewHTTPError(http.StatusLocked, map[string]interface{}{
+				"code":    "ACCOUNT_LOCKED",
+				"message": err.Error(),
+			})
+		}
 		return echo.NewHTTPError(http.StatusUnauthorized, err.Error())
 	}
 
@@ -154,21 +165,32 @@ func (h *Handler) RefreshToken(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid request")
 	}
 
-	// TODO: Validate refresh token against subscriber_sessions table
-	// For now issue a new access token with default claims
-	accessToken, err := h.deps.JWTConfig.GenerateAccessToken(middleware.Claims{
-		SubscriberID: 0,
-		TenantID:     0,
-		MSISDN:       "",
-		Locale:       "en",
+	token, err := jwt.ParseWithClaims(req.RefreshToken, &middleware.Claims{}, func(token *jwt.Token) (interface{}, error) {
+		return h.deps.JWTConfig.Secret, nil
 	})
-	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to generate token")
+	if err != nil || !token.Valid {
+		return echo.NewHTTPError(http.StatusUnauthorized, "invalid refresh token")
+	}
+	claims, ok := token.Claims.(*middleware.Claims)
+	if !ok || claims.Type != "refresh" {
+		return echo.NewHTTPError(http.StatusUnauthorized, "invalid token type")
 	}
 
+	hash := sha256.Sum256([]byte(req.RefreshToken))
+	tokenHash := hex.EncodeToString(hash[:])
+
+	accessToken, refreshToken, err := h.deps.SelfCareAuth.RotateSubscriberSession(
+		c.Request().Context(), claims.ID, tokenHash, c.RealIP(), c.Request().UserAgent(),
+	)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusUnauthorized, err.Error())
+	}
+	_ = h.deps.Redis.BlacklistToken(c.Request().Context(), claims.ID, h.deps.Config.Security.JWTRefreshTTL)
+
 	return c.JSON(http.StatusOK, map[string]interface{}{
-		"access_token": accessToken,
-		"expires_in":   int(h.deps.JWTConfig.AccessTTL.Seconds()),
+		"access_token":  accessToken,
+		"refresh_token": refreshToken,
+		"expires_in":    int(h.deps.JWTConfig.AccessTTL.Seconds()),
 	})
 }
 
@@ -180,10 +202,10 @@ func (h *Handler) Logout(c echo.Context) error {
 	}
 
 	ctx := c.Request().Context()
-	if err := h.deps.SelfCareAuth.RevokeSession(ctx, claims.SubscriberID, ""); err != nil {
+	if err := h.deps.SelfCareAuth.RevokeSession(ctx, claims.SubscriberID, claims.ID); err != nil {
 		// Soft fail - still return success to client
 	}
-
+	_ = h.deps.Redis.BlacklistToken(ctx, claims.ID, h.deps.Config.Security.JWTRefreshTTL)
 	return c.NoContent(http.StatusNoContent)
 }
 

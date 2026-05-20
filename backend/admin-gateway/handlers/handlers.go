@@ -6,11 +6,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/Grimid86/cgrates-ui/backend/pkg/auth"
 	"github.com/Grimid86/cgrates-ui/backend/pkg/branding"
+	"github.com/Grimid86/cgrates-ui/backend/pkg/config"
 	"github.com/Grimid86/cgrates-ui/backend/pkg/db"
 	"github.com/Grimid86/cgrates-ui/backend/pkg/i18n"
 	"github.com/Grimid86/cgrates-ui/backend/pkg/middleware"
@@ -18,7 +21,12 @@ import (
 	"github.com/Grimid86/cgrates-ui/backend/pkg/pulsar"
 	"github.com/Grimid86/cgrates-ui/backend/pkg/redis"
 	"github.com/Grimid86/cgrates-ui/backend/pkg/security"
+	"github.com/Grimid86/cgrates-ui/backend/pkg/storage"
+	"github.com/golang-jwt/jwt/v5"
+	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
+	"github.com/pquerna/otp/totp"
+	"golang.org/x/crypto/bcrypt"
 )
 
 // Dependencies holds all service dependencies
@@ -28,8 +36,10 @@ type Dependencies struct {
 	Pulsar    *pulsar.Client
 	I18n      *i18n.Service
 	Branding  *branding.Service
+	Storage   *storage.Client
 	JWTConfig middleware.JWTConfig
 	StaffAuth *auth.StaffAuth
+	Config    *config.Config
 }
 
 // Handler contains all HTTP handlers
@@ -39,7 +49,7 @@ type Handler struct {
 
 func New(deps Dependencies) *Handler {
 	if deps.StaffAuth == nil {
-		deps.StaffAuth = auth.NewStaffAuth(deps.DB, deps.JWTConfig)
+		deps.StaffAuth = auth.NewStaffAuth(deps.DB, deps.JWTConfig, deps.Config)
 	}
 	return &Handler{deps: deps}
 }
@@ -104,17 +114,55 @@ func (h *Handler) Login(c echo.Context) error {
 	// Authenticate
 	user, err := h.deps.StaffAuth.Authenticate(ctx, req.Email, req.Password, "admin")
 	if err != nil {
+		if err.Error() == "account locked" {
+			return echo.NewHTTPError(http.StatusLocked, map[string]interface{}{
+				"code":    "ACCOUNT_LOCKED",
+				"message": err.Error(),
+			})
+		}
 		return echo.NewHTTPError(http.StatusUnauthorized, err.Error())
 	}
 
-	// Mandatory MFA for admin
+	// MFA verification
 	mfaVerified := false
 	if user.MFAEnabled {
 		if req.MFACode == "" {
 			return echo.NewHTTPError(http.StatusForbidden, "mfa code required")
 		}
-		// TODO: Real TOTP verification
-		mfaVerified = true
+
+		// Try TOTP first
+		if user.MFASecret == nil || *user.MFASecret == "" {
+			return echo.NewHTTPError(http.StatusInternalServerError, "mfa secret not configured")
+		}
+		secret, err := security.DecryptAES(*user.MFASecret, h.deps.Config.Security.CSRFSecret)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, "failed to decrypt mfa secret")
+		}
+		if totp.Validate(req.MFACode, secret) {
+			mfaVerified = true
+		}
+
+		// Try backup codes if TOTP failed
+		if !mfaVerified && len(user.MFABackupCodes) > 0 {
+			var remainingCodes []string
+			for _, hash := range user.MFABackupCodes {
+				if security.VerifyPassword(req.MFACode, hash) {
+					mfaVerified = true
+					// Skip this code (consumed)
+					continue
+				}
+				remainingCodes = append(remainingCodes, hash)
+			}
+			if mfaVerified {
+				// Update consumed backup codes in DB
+				codesJSON, _ := json.Marshal(remainingCodes)
+				_ = h.deps.DB.Exec(ctx, `UPDATE users SET mfa_backup_codes = $1 WHERE id = $2`, codesJSON, user.ID)
+			}
+		}
+
+		if !mfaVerified {
+			return echo.NewHTTPError(http.StatusUnauthorized, "invalid mfa code")
+		}
 	}
 
 	perms, _ := h.deps.StaffAuth.GetUserPermissions(ctx, user.RoleID)
@@ -130,7 +178,7 @@ func (h *Handler) Login(c echo.Context) error {
 		"access_token":  accessToken,
 		"refresh_token": refreshToken,
 		"expires_in":    int(h.deps.JWTConfig.AccessTTL.Seconds()),
-		"mfa_required":  true,
+		"mfa_required":  user.MFAEnabled,
 		"user": map[string]interface{}{
 			"id":          user.ID,
 			"email":       user.Email,
@@ -141,10 +189,47 @@ func (h *Handler) Login(c echo.Context) error {
 }
 
 func (h *Handler) RefreshToken(c echo.Context) error {
-	return c.JSON(http.StatusOK, map[string]interface{}{"access_token": "eyJ...", "expires_in": 900})
+	var req struct {
+		RefreshToken string `json:"refresh_token" validate:"required"`
+	}
+	if err := c.Bind(&req); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid request")
+	}
+
+	token, err := jwt.ParseWithClaims(req.RefreshToken, &middleware.Claims{}, func(token *jwt.Token) (interface{}, error) {
+		return h.deps.JWTConfig.Secret, nil
+	})
+	if err != nil || !token.Valid {
+		return echo.NewHTTPError(http.StatusUnauthorized, "invalid refresh token")
+	}
+	claims, ok := token.Claims.(*middleware.Claims)
+	if !ok || claims.Type != "refresh" {
+		return echo.NewHTTPError(http.StatusUnauthorized, "invalid token type")
+	}
+
+	hash := sha256.Sum256([]byte(req.RefreshToken))
+	tokenHash := hex.EncodeToString(hash[:])
+
+	accessToken, refreshToken, err := h.deps.StaffAuth.RotatePortalSession(c.Request().Context(), claims.ID, tokenHash, c.RealIP())
+	if err != nil {
+		return echo.NewHTTPError(http.StatusUnauthorized, err.Error())
+	}
+	_ = h.deps.Redis.BlacklistToken(c.Request().Context(), claims.ID, h.deps.Config.Security.JWTRefreshTTL)
+
+	return c.JSON(http.StatusOK, map[string]interface{}{
+		"access_token":  accessToken,
+		"refresh_token": refreshToken,
+		"expires_in":    int(h.deps.JWTConfig.AccessTTL.Seconds()),
+	})
 }
 
 func (h *Handler) Logout(c echo.Context) error {
+	claims := middleware.GetClaims(c)
+	if claims == nil {
+		return echo.NewHTTPError(http.StatusUnauthorized, "not authenticated")
+	}
+	_ = h.deps.StaffAuth.RevokeSession(c.Request().Context(), claims.ID)
+	_ = h.deps.Redis.BlacklistToken(c.Request().Context(), claims.ID, h.deps.Config.Security.JWTRefreshTTL)
 	return c.NoContent(http.StatusNoContent)
 }
 
@@ -154,25 +239,57 @@ func (h *Handler) SetupMFA(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusUnauthorized, "not authenticated")
 	}
 
-	// TODO: Generate real TOTP secret using crypto/rand
-	secret := "JBSWY3DPEHPK3PXP"
-	qrCodeURL := fmt.Sprintf("otpauth://totp/UI-Bill:%s?secret=%s&issuer=UI-Bill", claims.UserID, secret)
+	ctx := c.Request().Context()
 
-	// Generate backup codes
-	var backupCodes []string
-	for i := 0; i < 8; i++ {
-		code, _ := security.GenerateRandomToken(4)
-		backupCodes = append(backupCodes, code)
+	// Get user email for TOTP account name
+	var userEmail string
+	err := h.deps.DB.QueryRow(ctx, `SELECT email FROM users WHERE id = $1`, claims.UserID).Scan(&userEmail)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to load user")
 	}
 
-	ctx := c.Request().Context()
-	// Store MFA secret (in production encrypt it)
-	_ = h.deps.DB.Exec(ctx, `UPDATE users SET mfa_secret = $1, mfa_enabled = true WHERE id = $2`, secret, claims.UserID)
+	// Generate TOTP key
+	key, err := totp.Generate(totp.GenerateOpts{
+		Issuer:      "UI-Bill",
+		AccountName: userEmail,
+	})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to generate mfa secret")
+	}
+	secret := key.Secret()
+
+	// Encrypt secret before storing
+	encryptedSecret, err := security.EncryptAES(secret, h.deps.Config.Security.CSRFSecret)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to encrypt mfa secret")
+	}
+
+	// Generate 8 backup codes (8 chars hex, e.g. "a1b2c3d4")
+	var backupCodesPlain []string
+	var backupCodesHash []string
+	for i := 0; i < 8; i++ {
+		code, err := security.GenerateRandomToken(4)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, "failed to generate backup codes")
+		}
+		backupCodesPlain = append(backupCodesPlain, code)
+		hash, err := security.HashPassword(code, bcrypt.DefaultCost)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, "failed to hash backup code")
+		}
+		backupCodesHash = append(backupCodesHash, hash)
+	}
+	backupCodesJSON, _ := json.Marshal(backupCodesHash)
+
+	// Store encrypted secret and hashed backup codes; do NOT enable MFA yet (requires verification)
+	_ = h.deps.DB.Exec(ctx,
+		`UPDATE users SET mfa_secret = $1, mfa_backup_codes = $2, mfa_enabled = false WHERE id = $3`,
+		encryptedSecret, backupCodesJSON, claims.UserID)
 
 	return c.JSON(http.StatusOK, map[string]interface{}{
 		"secret":       secret,
-		"qr_code_url":  qrCodeURL,
-		"backup_codes": backupCodes,
+		"qr_code_url":  key.URL(),
+		"backup_codes": backupCodesPlain,
 	})
 }
 
@@ -183,7 +300,32 @@ func (h *Handler) VerifyMFA(c echo.Context) error {
 	if err := c.Bind(&req); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid request")
 	}
-	// TODO: Real TOTP verification against stored secret
+
+	claims := middleware.GetClaims(c)
+	if claims == nil {
+		return echo.NewHTTPError(http.StatusUnauthorized, "not authenticated")
+	}
+
+	ctx := c.Request().Context()
+	var encryptedSecret string
+	err := h.deps.DB.QueryRow(ctx, `SELECT mfa_secret FROM users WHERE id = $1`, claims.UserID).Scan(&encryptedSecret)
+	if err != nil || encryptedSecret == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "mfa not set up")
+	}
+
+	secret, err := security.DecryptAES(encryptedSecret, h.deps.Config.Security.CSRFSecret)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to decrypt mfa secret")
+	}
+
+	valid := totp.Validate(req.Code, secret)
+	if !valid {
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid mfa code")
+	}
+
+	// Enable MFA after successful verification
+	_ = h.deps.DB.Exec(ctx, `UPDATE users SET mfa_enabled = true WHERE id = $1`, claims.UserID)
+
 	return c.JSON(http.StatusOK, map[string]interface{}{"verified": true})
 }
 
@@ -193,7 +335,9 @@ func (h *Handler) DisableMFA(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusUnauthorized, "not authenticated")
 	}
 	ctx := c.Request().Context()
-	_ = h.deps.DB.Exec(ctx, `UPDATE users SET mfa_enabled = false, mfa_secret = NULL WHERE id = $1`, claims.UserID)
+	_ = h.deps.DB.Exec(ctx,
+		`UPDATE users SET mfa_enabled = false, mfa_secret = NULL, mfa_backup_codes = '[]' WHERE id = $1`,
+		claims.UserID)
 	return c.NoContent(http.StatusNoContent)
 }
 
@@ -704,7 +848,39 @@ func (h *Handler) ListRoles(c echo.Context) error {
 }
 
 func (h *Handler) GetRole(c echo.Context) error {
-	return c.JSON(http.StatusOK, map[string]interface{}{"id": c.Param("id")})
+	claims := middleware.GetClaims(c)
+	if claims == nil {
+		return echo.NewHTTPError(http.StatusUnauthorized, "not authenticated")
+	}
+
+	roleID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid role id")
+	}
+
+	ctx := c.Request().Context()
+	var r struct {
+		ID          int64           `json:"id"`
+		Code        string          `json:"code"`
+		Name        string          `json:"name"`
+		Permissions json.RawMessage `json:"permissions"`
+		IsSystem    bool            `json:"is_system"`
+		CreatedAt   time.Time       `json:"created_at"`
+		UpdatedAt   time.Time       `json:"updated_at"`
+	}
+
+	query := `
+		SELECT id, code, name, permissions, is_system, created_at, updated_at
+		FROM roles
+		WHERE id = $1
+	`
+	if err := h.deps.DB.QueryRow(ctx, query, roleID).Scan(
+		&r.ID, &r.Code, &r.Name, &r.Permissions, &r.IsSystem, &r.CreatedAt, &r.UpdatedAt,
+	); err != nil {
+		return echo.NewHTTPError(http.StatusNotFound, "role not found")
+	}
+
+	return c.JSON(http.StatusOK, r)
 }
 
 func (h *Handler) CreateRole(c echo.Context) error {
@@ -893,8 +1069,72 @@ func (h *Handler) UpdateBranding(c echo.Context) error {
 }
 
 func (h *Handler) UploadLogo(c echo.Context) error {
-	// TODO: Implement multipart form upload to S3/MinIO
-	return c.JSON(http.StatusOK, map[string]interface{}{"logo_url": "https://cdn.example.com/logo.png"})
+	claims := middleware.GetClaims(c)
+	if claims == nil {
+		return echo.NewHTTPError(http.StatusUnauthorized, "not authenticated")
+	}
+
+	// Parse multipart form
+	fileHeader, err := c.FormFile("logo")
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "missing logo file")
+	}
+	file, err := fileHeader.Open()
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "cannot open logo file")
+	}
+	defer file.Close()
+
+	// Validate size
+	maxSize := int64(h.deps.Config.Branding.MaxLogoSizeMB) * 1024 * 1024
+	if fileHeader.Size > maxSize {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("file too large (max %dMB)", h.deps.Config.Branding.MaxLogoSizeMB))
+	}
+
+	// Validate MIME type by extension
+	ext := strings.ToLower(filepath.Ext(fileHeader.Filename))
+	allowed := map[string]string{
+		".png":  "image/png",
+		".jpg":  "image/jpeg",
+		".jpeg": "image/jpeg",
+		".svg":  "image/svg+xml",
+	}
+	contentType, ok := allowed[ext]
+	if !ok {
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid file type (allowed: png, jpg, svg)")
+	}
+
+	// Generate object key
+	objectKey := fmt.Sprintf("branding/%d/logo-%s%s", claims.TenantID, uuid.New().String(), ext)
+
+	ctx := c.Request().Context()
+
+	// Upload to MinIO
+	if err := h.deps.Storage.Upload(ctx, objectKey, file, fileHeader.Size, contentType); err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, fmt.Sprintf("upload failed: %v", err))
+	}
+
+	logoURL := h.deps.Storage.PublicURL(objectKey)
+
+	// Update database
+	if err := h.deps.DB.Exec(ctx, `
+		UPDATE branding_config SET logo_url = $1, updated_at = NOW()
+		WHERE tenant_id = $2
+	`, logoURL, claims.TenantID); err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "update branding config failed")
+	}
+
+	// Publish cache invalidation event
+	if h.deps.Pulsar != nil {
+		payload, _ := json.Marshal(map[string]interface{}{
+			"type":      "branding_updated",
+			"tenant_id": claims.TenantID,
+			"timestamp": time.Now(),
+		})
+		go h.deps.Pulsar.PublishTo(ctx, "persistent://billing/config/config.changes", payload, "")
+	}
+
+	return c.JSON(http.StatusOK, map[string]interface{}{"logo_url": logoURL})
 }
 
 func (h *Handler) ListEmailTemplates(c echo.Context) error {

@@ -20,6 +20,7 @@ import (
 	"github.com/Grimid86/cgrates-ui/backend/pkg/middleware"
 	"github.com/Grimid86/cgrates-ui/backend/pkg/pulsar"
 	"github.com/Grimid86/cgrates-ui/backend/pkg/redis"
+	"github.com/Grimid86/cgrates-ui/backend/pkg/storage"
 	"github.com/Grimid86/cgrates-ui/backend/admin-gateway/handlers"
 	"github.com/labstack/echo/v4"
 )
@@ -71,6 +72,17 @@ func main() {
 	i18nSvc := i18n.New(dbPool, redisClient)
 	brandingSvc := branding.New(dbPool, redisClient)
 
+	minioClient, err := storage.New(storage.Config{
+		Endpoint:  cfg.MinIO.Endpoint,
+		AccessKey: cfg.MinIO.AccessKey,
+		SecretKey: cfg.MinIO.SecretKey,
+		Bucket:    cfg.MinIO.Bucket,
+		UseSSL:    cfg.MinIO.UseSSL,
+	})
+	if err != nil {
+		log.Printf("Warning: MinIO not available: %v", err)
+	}
+
 	e := echo.New()
 	e.HideBanner = true
 	e.HidePort = true
@@ -86,7 +98,7 @@ func main() {
 		SyncForAuth: true,
 	}))
 
-	staffAuth := auth.NewStaffAuth(dbPool, jwtCfg)
+	staffAuth := auth.NewStaffAuth(dbPool, jwtCfg, cfg)
 
 	h := handlers.New(handlers.Dependencies{
 		DB:        dbPool,
@@ -94,8 +106,10 @@ func main() {
 		Pulsar:    pulsarClient,
 		I18n:      i18nSvc,
 		Branding:  brandingSvc,
+		Storage:   minioClient,
 		JWTConfig: jwtCfg,
 		StaffAuth: staffAuth,
+		Config:    cfg,
 	})
 
 	// Public
@@ -109,7 +123,7 @@ func main() {
 	e.POST("/api/v1/auth/refresh", h.RefreshToken)
 	e.POST("/api/v1/auth/logout", h.Logout, middleware.JWTMiddleware(jwtCfg))
 	e.POST("/api/v1/auth/mfa/setup", h.SetupMFA, middleware.JWTMiddleware(jwtCfg))
-	e.POST("/api/v1/auth/mfa/verify", h.VerifyMFA)
+	e.POST("/api/v1/auth/mfa/verify", h.VerifyMFA, middleware.JWTMiddleware(jwtCfg))
 	e.POST("/api/v1/auth/mfa/disable", h.DisableMFA, middleware.JWTMiddleware(jwtCfg))
 
 	// Protected
@@ -122,7 +136,9 @@ func main() {
 		KeyPrefix:    "rl:ad:",
 		KeyExtractor: middleware.DefaultKeyExtractor,
 	}))
+	api.Use(middleware.IdempotencyMiddleware(dbPool, redisClient, cfg))
 	api.Use(middleware.CSRFMiddleware(middleware.DefaultCSRFConfig(cfg.Security.CSRFSecret)))
+	api.Use(middleware.TokenBlacklistMiddleware(redisClient))
 	api.Use(middleware.RequireMFA()) // MFA mandatory for admin
 
 	// Tenants
@@ -151,7 +167,6 @@ func main() {
 	api.GET("/rbac/matrix", h.GetRBACMatrix, middleware.RequirePermission("user:read"))
 
 	// Branding / White Label
-	api.GET("/branding", h.GetBranding) // Public, but admin can also access
 	api.PUT("/branding", h.UpdateBranding, middleware.RequirePermission("branding:manage"))
 	api.POST("/branding/logo", h.UploadLogo, middleware.RequirePermission("branding:manage"))
 	api.GET("/branding/email-templates", h.ListEmailTemplates, middleware.RequirePermission("branding:read"))
@@ -159,8 +174,6 @@ func main() {
 	api.POST("/branding/email-templates/:id/preview", h.PreviewEmailTemplate, middleware.RequirePermission("branding:manage"))
 
 	// Localization
-	api.GET("/locales", h.GetLocales)
-	api.GET("/translations/:locale", h.GetTranslations)
 	api.POST("/translations", h.ImportTranslations, middleware.RequirePermission("translation:manage"))
 
 	// System Monitoring

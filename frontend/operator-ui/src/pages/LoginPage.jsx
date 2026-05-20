@@ -24,7 +24,15 @@ export default function LoginPage() {
       }
       navigate('/')
     } catch (err) {
-      setError(err.response?.data?.error?.message || 'Login failed')
+      const status = err.response?.status
+      const message = err.response?.data?.error?.message || 'Login failed'
+
+      if (status === 403 && message.toLowerCase().includes('mfa')) {
+        setStep('mfa')
+        return
+      }
+
+      setError(message)
     }
   }
 
@@ -53,9 +61,24 @@ export default function LoginPage() {
             </>
           ) : (
             <div>
-              <label className="block text-sm font-medium text-gray-700">MFA Code</label>
-              <input type="text" value={mfaCode} onChange={(e) => setMfaCode(e.target.value)} className="w-full px-4 py-2 border rounded-lg" maxLength={6} required />
-              <button type="button" onClick={() => setStep('credentials')} className="text-sm text-blue-600 mt-2">Back to credentials</button>
+              <label className="block text-sm font-medium text-gray-700">
+                {mfaCode.length > 6 ? 'Backup Code' : 'TOTP Code'}
+              </label>
+              <input
+                type="text"
+                value={mfaCode}
+                onChange={(e) => setMfaCode(e.target.value)}
+                className="w-full px-4 py-2 border rounded-lg"
+                placeholder="6-digit TOTP or 8-char backup code"
+                maxLength={8}
+                required
+              />
+              <p className="text-xs text-gray-500 mt-1">
+                Enter the 6-digit code from your authenticator app. If you lost access, use a backup code.
+              </p>
+              <button type="button" onClick={() => { setStep('credentials'); setMfaCode(''); setError('') }} className="text-sm text-blue-600 mt-2">
+                ← Back to credentials
+              </button>
             </div>
           )}
           <button type="submit" disabled={isLoading} className="w-full bg-brand-primary text-white py-2 rounded-lg hover:opacity-90 disabled:opacity-50">

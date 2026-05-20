@@ -97,7 +97,7 @@ func main() {
 	}))
 
 	// Initialize auth service
-	selfcareAuth := auth.NewSelfCareAuth(dbPool, jwtCfg)
+	selfcareAuth := auth.NewSelfCareAuth(dbPool, jwtCfg, cfg)
 
 	// Initialize handlers
 	h := handlers.New(handlers.Dependencies{
@@ -109,6 +109,7 @@ func main() {
 		Branding:     brandingSvc,
 		JWTConfig:    jwtCfg,
 		SelfCareAuth: selfcareAuth,
+		Config:       cfg,
 	})
 
 	// Public routes (no auth)
@@ -132,7 +133,9 @@ func main() {
 		KeyPrefix:    "rl:sc:",
 		KeyExtractor: middleware.DefaultKeyExtractor,
 	}))
+	api.Use(middleware.IdempotencyMiddleware(dbPool, redisClient, cfg))
 	api.Use(middleware.CSRFMiddleware(middleware.DefaultCSRFConfig(cfg.Security.CSRFSecret)))
+	api.Use(middleware.TokenBlacklistMiddleware(redisClient))
 
 	// Balance
 	api.GET("/balance", h.GetBalance)

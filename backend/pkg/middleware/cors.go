@@ -20,7 +20,7 @@ func DefaultCORSConfig(origins []string) CORSConfig {
 	return CORSConfig{
 		AllowedOrigins: origins,
 		AllowedMethods: []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete, http.MethodOptions},
-		AllowedHeaders: []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token", "X-Idempotency-Key", "X-MFA-Code", "X-Requested-With"},
+		AllowedHeaders: []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token", "Idempotency-Key", "X-MFA-Code", "X-Requested-With"},
 		MaxAge:         86400,
 	}
 }

@@ -21,6 +21,7 @@ import (
 	"github.com/Grimid86/cgrates-ui/backend/pkg/middleware"
 	"github.com/Grimid86/cgrates-ui/backend/pkg/pulsar"
 	"github.com/Grimid86/cgrates-ui/backend/pkg/redis"
+	"github.com/Grimid86/cgrates-ui/backend/pkg/storage"
 	"github.com/Grimid86/cgrates-ui/backend/operator-gateway/handlers"
 	"github.com/labstack/echo/v4"
 )
@@ -73,6 +74,17 @@ func main() {
 	i18nSvc := i18n.New(dbPool, redisClient)
 	brandingSvc := branding.New(dbPool, redisClient)
 
+	minioClient, err := storage.New(storage.Config{
+		Endpoint:  cfg.MinIO.Endpoint,
+		AccessKey: cfg.MinIO.AccessKey,
+		SecretKey: cfg.MinIO.SecretKey,
+		Bucket:    cfg.MinIO.Bucket,
+		UseSSL:    cfg.MinIO.UseSSL,
+	})
+	if err != nil {
+		log.Printf("Warning: MinIO not available: %v", err)
+	}
+
 	e := echo.New()
 	e.HideBanner = true
 	e.HidePort = true
@@ -87,7 +99,7 @@ func main() {
 		Async:      true,
 	}))
 
-	staffAuth := auth.NewStaffAuth(dbPool, jwtCfg)
+	staffAuth := auth.NewStaffAuth(dbPool, jwtCfg, cfg)
 
 	h := handlers.New(handlers.Dependencies{
 		DB:        dbPool,
@@ -96,8 +108,10 @@ func main() {
 		CGRateS:   cgratesClient,
 		I18n:      i18nSvc,
 		Branding:  brandingSvc,
+		Storage:   minioClient,
 		JWTConfig: jwtCfg,
 		StaffAuth: staffAuth,
+		Config:    cfg,
 	})
 
 	// Public
@@ -111,6 +125,13 @@ func main() {
 	e.POST("/api/v1/auth/refresh", h.RefreshToken)
 	e.POST("/api/v1/auth/logout", h.Logout, middleware.JWTMiddleware(jwtCfg))
 
+	// MFA (JWT required)
+	mfa := e.Group("/api/v1/auth/mfa")
+	mfa.Use(middleware.JWTMiddleware(jwtCfg))
+	mfa.POST("/setup", h.SetupMFA)
+	mfa.POST("/verify", h.VerifyMFA)
+	mfa.POST("/disable", h.DisableMFA)
+
 	// Protected
 	api := e.Group("/api/v1")
 	api.Use(middleware.JWTMiddleware(jwtCfg))
@@ -121,7 +142,9 @@ func main() {
 		KeyPrefix:    "rl:op:",
 		KeyExtractor: middleware.DefaultKeyExtractor,
 	}))
+	api.Use(middleware.IdempotencyMiddleware(dbPool, redisClient, cfg))
 	api.Use(middleware.CSRFMiddleware(middleware.DefaultCSRFConfig(cfg.Security.CSRFSecret)))
+	api.Use(middleware.TokenBlacklistMiddleware(redisClient))
 
 	// Subscribers
 	api.GET("/subscribers", h.ListSubscribers, middleware.RequirePermission("subscriber:read"))

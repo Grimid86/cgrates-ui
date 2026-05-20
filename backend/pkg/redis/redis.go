@@ -77,6 +77,17 @@ func (c *Client) HGetAll(ctx context.Context, key string) (map[string]string, er
 	return c.rdb.HGetAll(ctx, key).Result()
 }
 
+// BlacklistToken adds a token JTI to the revocation list with TTL
+func (c *Client) BlacklistToken(ctx context.Context, jti string, ttl time.Duration) error {
+	return c.rdb.Set(ctx, "blacklist:"+jti, "1", ttl).Err()
+}
+
+// IsTokenBlacklisted checks if a token JTI is revoked
+func (c *Client) IsTokenBlacklisted(ctx context.Context, jti string) bool {
+	exists, err := c.rdb.Exists(ctx, "blacklist:"+jti).Result()
+	return err == nil && exists > 0
+}
+
 // SlidingWindowRateLimit checks if request is within rate limit
 func (c *Client) SlidingWindowRateLimit(ctx context.Context, key string, limit int, window time.Duration) (bool, error) {
 	pipe := c.rdb.Pipeline()

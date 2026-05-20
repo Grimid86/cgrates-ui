@@ -2,9 +2,14 @@
 package security
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"regexp"
 
 	"golang.org/x/crypto/bcrypt"
@@ -59,4 +64,57 @@ func ValidateIMSI(imsi string) bool {
 func ValidateHexColor(color string) bool {
 	re := regexp.MustCompile(`^#[0-9A-Fa-f]{6}$`)
 	return re.MatchString(color)
+}
+
+// deriveKey creates a 32-byte AES key from a passphrase
+func deriveKey(passphrase string) []byte {
+	sum := sha256.Sum256([]byte(passphrase))
+	return sum[:]
+}
+
+// EncryptAES encrypts plaintext using AES-256-GCM with a key derived from passphrase.
+// Returns base64-encoded "nonce:ciphertext".
+func EncryptAES(plaintext, passphrase string) (string, error) {
+	key := deriveKey(passphrase)
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return "", fmt.Errorf("encrypt: %w", err)
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return "", fmt.Errorf("encrypt: %w", err)
+	}
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+		return "", fmt.Errorf("encrypt: %w", err)
+	}
+	ciphertext := gcm.Seal(nonce, nonce, []byte(plaintext), nil)
+	return base64.StdEncoding.EncodeToString(ciphertext), nil
+}
+
+// DecryptAES decrypts base64-encoded "nonce:ciphertext" using AES-256-GCM.
+func DecryptAES(ciphertextB64, passphrase string) (string, error) {
+	key := deriveKey(passphrase)
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return "", fmt.Errorf("decrypt: %w", err)
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return "", fmt.Errorf("decrypt: %w", err)
+	}
+	ciphertext, err := base64.StdEncoding.DecodeString(ciphertextB64)
+	if err != nil {
+		return "", fmt.Errorf("decrypt: %w", err)
+	}
+	nonceSize := gcm.NonceSize()
+	if len(ciphertext) < nonceSize {
+		return "", fmt.Errorf("decrypt: ciphertext too short")
+	}
+	nonce, ciphertext := ciphertext[:nonceSize], ciphertext[nonceSize:]
+	plaintext, err := gcm.Open(nil, nonce, ciphertext, nil)
+	if err != nil {
+		return "", fmt.Errorf("decrypt: %w", err)
+	}
+	return string(plaintext), nil
 }

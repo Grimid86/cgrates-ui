@@ -72,12 +72,23 @@ type Config struct {
 		RateLimitRPS     int           `validate:"gt=0"`
 		RateLimitRPM     int           `validate:"gt=0"`
 		IdempotencyTTL   time.Duration `validate:"required"`
+		MaxFailedLoginAttempts int     `validate:"gt=0"`
+		LockoutDuration  time.Duration `validate:"required"`
 	}
 
 	// Branding / CDN
 	Branding struct {
 		CDNBaseURL     string `validate:"omitempty,uri"`
 		MaxLogoSizeMB  int    `validate:"gte=1,lte=10"`
+	}
+
+	// MinIO / S3 Storage
+	MinIO struct {
+		Endpoint  string `validate:"required,uri"`
+		AccessKey string `validate:"required"`
+		SecretKey string `validate:"required"`
+		Bucket    string `validate:"required"`
+		UseSSL    bool
 	}
 
 	// CORS
@@ -176,10 +187,19 @@ func Load() (*Config, error) {
 	cfg.Security.MFAEnabled = getBoolEnv("MFA_ENABLED", false)
 	cfg.Security.MFAIssuer = getEnv("MFA_ISSUER", "UI-Bill")
 	cfg.Security.IdempotencyTTL = getDurationEnv("IDEMPOTENCY_TTL", 24*time.Hour)
+	cfg.Security.MaxFailedLoginAttempts = getIntEnv("MAX_FAILED_LOGIN_ATTEMPTS", 5)
+	cfg.Security.LockoutDuration = getDurationEnv("LOCKOUT_DURATION", 15*time.Minute)
 
 	// Branding
 	cfg.Branding.CDNBaseURL = getEnv("CDN_BASE_URL", "")
 	cfg.Branding.MaxLogoSizeMB = getIntEnv("MAX_LOGO_SIZE_MB", 2)
+
+	// MinIO
+	cfg.MinIO.Endpoint = getEnv("MINIO_ENDPOINT", "http://localhost:9000")
+	cfg.MinIO.AccessKey = getEnv("MINIO_ACCESS_KEY", "minioadmin")
+	cfg.MinIO.SecretKey = getEnv("MINIO_SECRET_KEY", "minioadmin")
+	cfg.MinIO.Bucket = getEnv("MINIO_BUCKET", "uibill")
+	cfg.MinIO.UseSSL = getEnv("MINIO_USE_SSL", "false") == "true"
 
 	// CORS origins per gateway
 	cfg.CORS.AllowedOrigins = getCORSOrigins(cfg.GatewayType)
