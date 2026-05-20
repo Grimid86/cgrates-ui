@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Grimid86/cgrates-ui/backend/pkg/auth"
 	"github.com/Grimid86/cgrates-ui/backend/pkg/branding"
 	"github.com/Grimid86/cgrates-ui/backend/pkg/cgrates"
 	"github.com/Grimid86/cgrates-ui/backend/pkg/config"
@@ -95,15 +96,19 @@ func main() {
 		Async:      true,
 	}))
 
+	// Initialize auth service
+	selfcareAuth := auth.NewSelfCareAuth(dbPool, jwtCfg)
+
 	// Initialize handlers
 	h := handlers.New(handlers.Dependencies{
-		DB:        dbPool,
-		Redis:     redisClient,
-		Pulsar:    pulsarClient,
-		CGRateS:   cgratesClient,
-		I18n:      i18nSvc,
-		Branding:  brandingSvc,
-		JWTConfig: jwtCfg,
+		DB:           dbPool,
+		Redis:        redisClient,
+		Pulsar:       pulsarClient,
+		CGRateS:      cgratesClient,
+		I18n:         i18nSvc,
+		Branding:     brandingSvc,
+		JWTConfig:    jwtCfg,
+		SelfCareAuth: selfcareAuth,
 	})
 
 	// Public routes (no auth)
