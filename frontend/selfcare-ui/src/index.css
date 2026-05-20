@@ -1,0 +1,19 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --brand-primary: #007bff;
+    --brand-secondary: #6c757d;
+    --brand-accent: #28a745;
+    --brand-danger: #dc3545;
+    --brand-bg: #f8f9fa;
+    --brand-text: #212529;
+  }
+  body {
+    background-color: var(--brand-bg);
+    color: var(--brand-text);
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  }
+}

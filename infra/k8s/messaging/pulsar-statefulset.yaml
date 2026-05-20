@@ -1,0 +1,51 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: pulsar-broker
+  namespace: billing-messaging
+spec:
+  serviceName: pulsar-broker
+  replicas: 3
+  selector:
+    matchLabels:
+      app: pulsar
+      component: broker
+  template:
+    metadata:
+      labels:
+        app: pulsar
+        component: broker
+    spec:
+      containers:
+      - name: pulsar
+        image: apachepulsar/pulsar:3.2.0
+        command:
+        - bin/pulsar
+        - broker
+        ports:
+        - containerPort: 6650
+          name: pulsar-tcp
+        - containerPort: 8080
+          name: http
+        env:
+        - name: PULSAR_MEM
+          value: " -Xms1g -Xmx1g -XX:MaxDirectMemorySize=1g"
+        volumeMounts:
+        - name: pulsar-data
+          mountPath: /pulsar/data
+        resources:
+          requests:
+            memory: "1Gi"
+            cpu: "500m"
+          limits:
+            memory: "2Gi"
+            cpu: "2000m"
+  volumeClaimTemplates:
+  - metadata:
+      name: pulsar-data
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      resources:
+        requests:
+          storage: 100Gi
+      storageClassName: fast-ssd

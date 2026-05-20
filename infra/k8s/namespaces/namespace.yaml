@@ -1,0 +1,39 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: billing-selfcare
+  labels:
+    app.kubernetes.io/part-of: ui-bill
+    app.kubernetes.io/component: selfcare
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: billing-operator
+  labels:
+    app.kubernetes.io/part-of: ui-bill
+    app.kubernetes.io/component: operator
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: billing-admin
+  labels:
+    app.kubernetes.io/part-of: ui-bill
+    app.kubernetes.io/component: admin
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: billing-database
+  labels:
+    app.kubernetes.io/part-of: ui-bill
+    app.kubernetes.io/component: database
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: billing-messaging
+  labels:
+    app.kubernetes.io/part-of: ui-bill
+    app.kubernetes.io/component: messaging

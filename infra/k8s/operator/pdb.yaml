@@ -1,0 +1,21 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: operator-gateway-pdb
+  namespace: billing-operator
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: operator-gateway
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: operator-ui-pdb
+  namespace: billing-operator
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: operator-ui

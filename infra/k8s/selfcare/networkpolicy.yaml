@@ -1,0 +1,56 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: selfcare-deny-cross-portal
+  namespace: billing-selfcare
+spec:
+  podSelector:
+    matchLabels:
+      app: selfcare-gateway
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: billing-selfcare
+      podSelector:
+        matchLabels:
+          app: selfcare-ui
+    ports:
+    - protocol: TCP
+      port: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: selfcare-default-deny-egress
+  namespace: billing-selfcare
+spec:
+  podSelector:
+    matchLabels:
+      app: selfcare-gateway
+  policyTypes:
+  - Egress
+  egress:
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: billing-database
+    ports:
+    - protocol: TCP
+      port: 5432
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: billing-messaging
+    ports:
+    - protocol: TCP
+      port: 6650
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: billing-messaging
+    ports:
+    - protocol: TCP
+      port: 6379

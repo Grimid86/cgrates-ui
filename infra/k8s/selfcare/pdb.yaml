@@ -1,0 +1,21 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: selfcare-gateway-pdb
+  namespace: billing-selfcare
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: selfcare-gateway
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: selfcare-ui-pdb
+  namespace: billing-selfcare
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: selfcare-ui

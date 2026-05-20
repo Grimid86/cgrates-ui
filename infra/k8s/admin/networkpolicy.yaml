@@ -1,0 +1,22 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: admin-deny-cross-portal
+  namespace: billing-admin
+spec:
+  podSelector:
+    matchLabels:
+      app: admin-gateway
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: billing-admin
+      podSelector:
+        matchLabels:
+          app: admin-ui
+    ports:
+    - protocol: TCP
+      port: 8080
